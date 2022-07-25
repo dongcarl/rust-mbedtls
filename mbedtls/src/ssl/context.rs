@@ -363,6 +363,14 @@ impl<'ctx> HandshakeContext<'ctx> {
 
         Ok(())
     }
+
+    pub fn set_psk(&mut self, psk: &[u8]) -> Result<()> {
+        unsafe {
+            ssl_set_hs_psk(self.context.into(), psk.as_ptr(), psk.len()).into_result()?;
+        }
+
+        Ok(())
+    }
 }
 
 
@@ -374,7 +382,6 @@ impl<'ctx> HandshakeContext<'ctx> {
 // ssl_renegotiate
 // ssl_send_alert_message
 // ssl_set_client_transport_id
-// ssl_set_hs_psk
 // ssl_set_timer_cb
 //
 // ssl_handshake_step

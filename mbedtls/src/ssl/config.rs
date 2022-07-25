@@ -103,6 +103,7 @@ callback!(VerifyCallback: Fn(&Certificate, i32, &mut VerifyError) -> Result<()>)
 callback!(DbgCallback: Fn(i32, Cow<'_, str>, i32, Cow<'_, str>) -> ());
 callback!(SniCallback: Fn(&mut HandshakeContext, &[u8]) -> Result<()>);
 callback!(CaCallback: Fn(&MbedtlsList<Certificate>) -> Result<MbedtlsList<Certificate>>);
+callback!(PskCallback: Fn(&mut HandshakeContext, &str) -> Result<()>);
 
 define!(
     #[c_ty(ssl_config)]
@@ -130,6 +131,7 @@ define!(
         sni_callback: Option<Arc<dyn SniCallback + 'static>>,
         ticket_callback: Option<Arc<dyn TicketCallback + 'static>>,
         ca_callback: Option<Arc<dyn CaCallback + 'static>>,
+        psk_callback: Option<Arc<dyn PskCallback + 'static>>,
     };
     const drop: fn(&mut Self) = ssl_config_free;
     impl<'a> Into<ptr> {}
@@ -165,6 +167,7 @@ impl Config {
             sni_callback: None,
             ticket_callback: None,
             ca_callback: None,
+            psk_callback: None,
         }
     }
 
@@ -445,6 +448,43 @@ impl Config {
         self.dbg_callback = Some(Arc::new(cb));
         unsafe { ssl_conf_dbg(self.into(), Some(dbg_callback::<F>), &**self.dbg_callback.as_mut().unwrap() as *const _ as *mut c_void) }
     }
+
+    pub fn set_psk(&mut self, psk: &[u8], psk_identity: &str) -> Result<()> {
+        unsafe { ssl_conf_psk(&mut self.inner,
+                         psk.as_ptr(), psk.len(),
+                         psk_identity.as_ptr(), psk_identity.len())
+            .into_result().map(|_| ())
+        }
+    }
+
+    pub fn set_psk_callback<F>(&mut self, cb: F)
+        where
+            F: PskCallback + 'static,
+    {
+        unsafe extern "C" fn psk_callback<F>(
+            closure: *mut c_void,
+            ctx: *mut ssl_context,
+            psk_identity: *const c_uchar,
+            identity_len: size_t,
+        ) -> c_int
+        where
+              F: PskCallback + 'static,
+        {
+            let cb = &mut *(closure as *mut F);
+            let context = UnsafeFrom::from(ctx).unwrap();
+
+            let mut ctx = HandshakeContext::init(context);
+
+            let psk_identity = std::str::from_utf8_unchecked(from_raw_parts(psk_identity, identity_len));
+            match cb(&mut ctx, psk_identity) {
+                Ok(()) => 0,
+                Err(e) => e.to_int(),
+            }
+        }
+
+        self.psk_callback = Some(Arc::new(cb));
+        unsafe { ssl_conf_psk_cb(self.into(), Some(psk_callback::<F>), &**self.psk_callback.as_mut().unwrap() as *const _ as *mut c_void) }
+    }
 }
 
 // TODO
@@ -454,8 +494,6 @@ impl Config {
 // ssl_conf_dtls_badmac_limit
 // ssl_conf_handshake_timeout
 // ssl_conf_session_cache
-// ssl_conf_psk
-// ssl_conf_psk_cb
 // ssl_conf_sig_hashes
 // ssl_conf_alpn_protocols
 // ssl_conf_fallback
